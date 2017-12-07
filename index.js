@@ -53,8 +53,9 @@ async function getThresholdMutualFriends(userIds, threshold) {
         return agg;
     }, []);
 
-    const thresholdFriends = friendInDegrees.filter(friend => friend.count >= threshold).map(friend => friend.id);
-    return thresholdFriends;
+    return friendInDegrees.filter(
+        friend => friend.count >= threshold
+    ).map(friend => friend.id);
 }
 
 const objectsToCSV = (fields, objects) => [
@@ -63,27 +64,52 @@ const objectsToCSV = (fields, objects) => [
 ].map(row => row.join(',')).join('\n');
 
 async function start() {
-    const mutualFriends = await getMutualFriends(seed);
+    const mutualFriends = await getThresholdMutualFriends(seed, 3);
 
-    const thresholdFriends = await getThresholdMutualFriends(mutualFriends, 3);
+    const thresholdFriends = await getThresholdMutualFriends(mutualFriends, 6);
     
-    const mutualFriendsFriends = await Promise.all(mutualFriends.map(id => getFriendEdges(id)));
+    const seedFriendsEdges = await Promise.all(seed.map(id => getFriendEdges(id)));
+    const thresholdFriendsEdges = await Promise.all(thresholdFriends.map(id => getFriendEdges(id)));
+    const mutualFriendsEdges = await Promise.all(mutualFriends.map(id => getFriendEdges(id)));
+    const filteredRawEdges = ([
+        ...seedFriendsEdges,
+        ...thresholdFriendsEdges,
+        ...mutualFriendsEdges
+    ]).filter(({ source }, i, inclusiveList) => 
+       inclusiveList.findIndex(sourceItem => sourceItem.source === source) === i
+    );
 
-    const edges = [].concat(...mutualFriendsFriends.map(({ source, targetIds }) => {
-        return targetIds.map(target => ({ source, target }));
-    }));
-    const filteredEdges = edges.filter(edge => thresholdFriends.includes(edge.target) && thresholdFriends.includes(edge.source));
+    const edges = [].concat(...filteredRawEdges.map(({ source, targetIds }) =>
+        targetIds.map(target => ({ source, target }))
+    ));
+
+    let nodes = await api.getBulkUserData(thresholdFriends);
+    nodes.forEach(node => {
+        const textContent = [
+            (node.description || ''),
+            ((node.status && node.status.text) || '')
+        ].join();
+        node.hasKeyword = /(network|system|complex|social sci)/i.test(textContent) ? 1 : 0;
+        node.isLocal = /(Portland|Oregon|\WOR\W)/i.test(node.location);
+    });
+    nodes = nodes.filter(node => 
+        thresholdFriends.includes(node.id) && node.followers_count < 4e5
+    );
+    const nodeIds = nodes.map(node => node.id);
+
+    const filteredEdges = edges.filter(edge => nodeIds.includes(edge.target) && nodeIds.includes(edge.source));
 
     const filteredEdgesCSV = filteredEdges.map(edge => [edge.source, edge.target].join(',')).join('\n');
     await writeFile(path.resolve(__dirname, `./output-filtered-edges.csv`), filteredEdgesCSV);
 
-    const nodes = await api.getBulkUserData(thresholdFriends);
     const nodesCSV = objectsToCSV([
         'id',
         'name',
         'screen_name',
         'followers_count',
-        'friends_count'
+        'friends_count',
+        'hasKeyword',
+        'isLocal',
     ], nodes);
     await writeFile(path.resolve(__dirname, `./output-filtered-nodes.csv`), nodesCSV);
 }

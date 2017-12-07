@@ -94,7 +94,9 @@ async function cachedApi(tgtFn, ...args) {
     try { 
         // Get the cached version if available
         const content = await readFile(cachedPath);
-        return JSON.parse(content).data;
+        const data = JSON.parse(content).data;
+        if (!data.length) throw new Error();
+        return data;
     } catch (error) { 
         // Call API function and cache results
         console.log('cache lookup fail', error);
